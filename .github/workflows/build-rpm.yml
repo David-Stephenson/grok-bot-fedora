@@ -1,0 +1,137 @@
+name: Build unofficial Grok Bot RPM
+
+on:
+  schedule:
+    # Daily 06:17 UTC — pick up new Grok Bot / Cursor releases.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      grokbot_version:
+        description: Grok Bot version (empty = autodetect)
+        required: false
+        type: string
+      force:
+        description: Rebuild even if this version already has RPMs
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-rpm
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      grokbot_version: ${{ steps.plan.outputs.grokbot_version }}
+      skip: ${{ steps.plan.outputs.skip }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Detect version and missing arches
+        id: plan
+        env:
+          GROKBOT_VERSION: ${{ inputs.grokbot_version }}
+          FORCE: ${{ inputs.force }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/ci_plan.py
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: fedora:latest
+    env:
+      GROKBOT_VERSION: ${{ needs.plan.outputs.grokbot_version }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          dnf -y install \
+            git python3 rpm-build rpm cpio unzip gcc gcc-c++ glibc-devel make \
+            nodejs npm which findutils tar gzip binutils \
+            desktop-file-utils
+          dnf -y install 7zip || dnf -y install p7zip p7zip-plugins
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/cache@v4
+        with:
+          path: downloads
+          key: grokbot-${{ matrix.arch }}-${{ needs.plan.outputs.grokbot_version }}
+
+      - name: Build RPM
+        run: |
+          python3 scripts/build.py \
+            --arch "${{ matrix.arch }}" \
+            --grokbot-version "${GROKBOT_VERSION}" \
+            --out dist \
+            --cache downloads
+
+      - name: Upload RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.arch }}
+          path: dist/grok-bot-*.rpm
+          if-no-files-found: error
+
+      - name: Upload metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: metadata-${{ matrix.arch }}
+          path: dist/metadata.json
+          if-no-files-found: error
+
+  release:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      VER: ${{ needs.plan.outputs.grokbot_version }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: rpm-*
+          merge-multiple: true
+          path: rpms
+
+      - name: Publish GitHub release
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(rpms/grok-bot-*.rpm)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "no RPMs to publish" >&2
+            exit 1
+          fi
+          notes="$(cat <<EOF
+          Unofficial Fedora RPMs of Grok Bot ${VER}.
+
+          These packages are **not** published by xAI, Anysphere, or Cursor.
+          They assemble the official macOS app bundle, the official Electron
+          Linux binary, and native addons extracted from the Cursor Linux RPM.
+
+          Install on Fedora:
+
+          \`\`\`
+          sudo dnf install ./grok-bot-${VER}-*.rpm
+          \`\`\`
+          EOF
+          )"
+          if gh release view "v${VER}" >/dev/null 2>&1; then
+            gh release upload "v${VER}" "${files[@]}" --clobber
+          else
+            gh release create "v${VER}" "${files[@]}" \
+              --title "Grok Bot ${VER} (unofficial Linux RPM)" \
+              --notes "${notes}"
+          fi

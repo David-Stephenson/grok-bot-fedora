@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Grok Bot
+Comment=Unofficial Fedora port of Grok Bot
+Exec=grok-bot %U
+Icon=grok-bot
+Terminal=false
+Type=Application
+Categories=Network;Office;
+StartupWMClass=Grok Bot
+MimeType=x-scheme-handler/grokbot;x-scheme-handler/sand;
