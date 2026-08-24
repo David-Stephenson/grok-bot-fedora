@@ -1,0 +1,10 @@
+This repository contains only packaging scripts, RPM spec files, and GitHub
+Actions workflows. Those files are licensed under the MIT License (see LICENSE).
+
+The Grok Bot application, Cursor IDE binaries, Electron runtime, native Node
+addons, icons, and other files downloaded at build time are copyright their
+respective owners (including xAI, Anysphere, and the Electron project) and are
+NOT covered by this repository's MIT license.
+
+This project is unofficial and is not affiliated with, endorsed by, or
+supported by xAI, Anysphere, or Cursor.
