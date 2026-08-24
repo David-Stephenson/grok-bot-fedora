@@ -373,6 +373,12 @@ def rpmbuild_payload(
     for sub in ("BUILD", "RPMS", "SOURCES", "SPECS", "SRPMS", "BUILDROOT"):
         (topdir / sub).mkdir(parents=True, exist_ok=True)
 
+    # rpmbuild %install cds into BUILD/, so every path macro must be absolute.
+    payload = payload.resolve()
+    wrapper = wrapper.resolve()
+    desktop = desktop.resolve()
+    topdir = topdir.resolve()
+    spec = spec.resolve()
     defines = [
         "-D",
         f"_topdir {topdir}",
@@ -392,7 +398,7 @@ def rpmbuild_payload(
         f"_target_cpu {rpm_arch}",
     ]
     if icon and icon.exists():
-        defines.extend(["-D", f"icon {icon}", "-D", "has_icon 1"])
+        defines.extend(["-D", f"icon {icon.resolve()}", "-D", "has_icon 1"])
     else:
         defines.extend(["-D", "has_icon 0"])
 
