@@ -64,12 +64,14 @@ jobs:
 
       - uses: actions/checkout@v5
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: downloads
           key: grokbot-${{ matrix.arch }}-${{ needs.plan.outputs.grokbot_version }}
 
       - name: Build RPM
+        env:
+          PYTHONUNBUFFERED: "1"
         run: |
           python3 scripts/build.py \
             --arch "${{ matrix.arch }}" \
@@ -78,14 +80,14 @@ jobs:
             --cache downloads
 
       - name: Upload RPM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rpm-${{ matrix.arch }}
           path: dist/grok-bot-*.rpm
           if-no-files-found: error
 
       - name: Upload metadata
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: metadata-${{ matrix.arch }}
           path: dist/metadata.json
@@ -99,7 +101,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       VER: ${{ needs.plan.outputs.grokbot_version }}
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
           pattern: rpm-*
           merge-multiple: true

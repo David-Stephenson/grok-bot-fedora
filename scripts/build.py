@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import plistlib
 import re
 import shutil
 import stat
@@ -63,26 +64,91 @@ def cursor_platform(rpm_arch: str) -> str:
     return {"aarch64": "linux-arm64", "x86_64": "linux-x64"}[rpm_arch]
 
 
-def parse_plist_version(plist: Path) -> str:
-    text = plist.read_text(errors="replace")
+_ELECTRON_VERSION_RE = re.compile(rb"Electron/(\d+\.\d+\.\d+)")
+_SEMVER_RE = re.compile(r"^(\d+\.\d+\.\d+)")
+
+
+def _semver(value: object) -> str | None:
+    if isinstance(value, (int, float)):
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    match = _SEMVER_RE.match(value.strip())
+    return match.group(1) if match else None
+
+
+def parse_plist_version(plist: Path) -> str | None:
+    """Read CFBundleShortVersionString from XML or binary Info.plist."""
+    data = plist.read_bytes()
+    parsed: object | None = None
+    try:
+        parsed = plistlib.loads(data)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict):
+        for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+            version = _semver(parsed.get(key))
+            if version:
+                return version
+    text = data.decode("utf-8", "replace")
     match = re.search(
         r"<key>CFBundleShortVersionString</key>\s*<string>([0-9.]+)</string>",
         text,
     )
-    if not match:
-        raise SystemExit(f"No CFBundleShortVersionString in {plist}")
-    return match.group(1)
+    if match:
+        return _semver(match.group(1))
+    match = re.search(r"<key>CFBundleVersion</key>\s*<string>([0-9.]+)</string>", text)
+    if match:
+        return _semver(match.group(1))
+    return None
+
+
+def _electron_version_in_file(path: Path) -> str | None:
+    """Scan a Mach-O / blob for an embedded Electron/X.Y.Z ident."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size <= 0:
+        return None
+    with path.open("rb") as fh:
+        prev = b""
+        while True:
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                break
+            buf = prev + chunk
+            match = _ELECTRON_VERSION_RE.search(buf)
+            if match:
+                return match.group(1).decode()
+            prev = buf[-24:]
+    return None
 
 
 def parse_electron_framework_version(extracted_dmg: Path) -> str:
     hits = list(extracted_dmg.rglob("Electron Framework.framework/**/Info.plist"))
-    if not hits:
-        hits = list(
-            extracted_dmg.rglob("**/Electron Framework.framework/Versions/A/Resources/Info.plist")
-        )
-    if not hits:
-        raise SystemExit("Could not find Electron Framework Info.plist in the DMG")
-    return parse_plist_version(hits[0])
+    hits.sort(key=lambda p: (0 if p.parent.name == "Resources" else 1, len(str(p))))
+    for plist in hits:
+        version = parse_plist_version(plist)
+        if version:
+            print(f"  Electron {version} (from {plist.relative_to(extracted_dmg)})")
+            return version
+
+    binaries = [
+        p
+        for p in extracted_dmg.rglob("Electron Framework.framework/**/Electron Framework")
+        if p.is_file()
+    ]
+    for binary in binaries:
+        version = _electron_version_in_file(binary)
+        if version:
+            print(f"  Electron {version} (from {binary.relative_to(extracted_dmg)})")
+            return version
+
+    raise SystemExit(
+        "Could not determine Electron version from the DMG "
+        "(no CFBundleShortVersionString / Electron/X.Y.Z ident)"
+    )
 
 
 def extract_png_from_icns(icns: Path, dest: Path) -> bool:
